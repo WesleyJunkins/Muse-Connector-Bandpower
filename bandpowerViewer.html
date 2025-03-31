@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Muse Band Power Viewer</title>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --primary-color: #0066cc;
+            --secondary-color: #ADD8E6;
+            --accent-color: #00ff00;
+        }
+
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #f5f7fa 0%, #e4e8eb 100%);
+        }
+
+        h1 {
+            color: var(--primary-color);
+            text-align: right;
+            margin-bottom: 30px;
+        }
+
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+            border-left: 4px solid var(--accent-color);
+        }
+
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+            border-left: 4px solid #dc3545;
+        }
+
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            cursor: pointer;
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .mqtt-config {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+
+        .mqtt-config h3 {
+            color: var(--primary-color);
+            margin-top: 0;
+            margin-bottom: 15px;
+        }
+
+        .config-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+        }
+
+        .config-item {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .config-item label {
+            font-weight: 500;
+            color: #666;
+        }
+
+        .config-item input,
+        .config-item select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .config-item input:focus,
+        .config-item select:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 2px rgba(0, 102, 204, 0.1);
+        }
+
+        .button-container {
+            margin-top: 20px;
+            text-align: center;
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+
+        #mqttConnectButton {
+            background: var(--primary-color);
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        #mqttConnectButton:hover {
+            background: #0052a3;
+            transform: translateY(-2px);
+        }
+
+        #mqttConnectButton:disabled {
+            background: #cccccc;
+            cursor: not-allowed;
+        }
+
+        #mqttConnectButton.refresh {
+            background: #28a745;
+        }
+
+        #mqttConnectButton.refresh:hover {
+            background: #218838;
+        }
+
+        .chart-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            margin-top: 20px;
+            position: relative;
+            height: 400px;
+            transition: all 0.3s ease;
+        }
+
+        .chart-container.fullscreen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            margin: 0;
+            padding: 20px;
+            z-index: 1000;
+            background: white;
+        }
+
+        .chart-container.fullscreen #fitButton {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1001;
+        }
+
+        .chart-container.fullscreen ~ * {
+            display: none;
+        }
+
+        .connection-status {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 10px;
+            margin: 20px 0;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid var(--secondary-color);
+            border-top: 4px solid var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        .status-text {
+            color: var(--primary-color);
+            font-size: 16px;
+            font-weight: 500;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        #fitButton {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 1;
+        }
+    </style>
+</head>
+<body>
+    <h1>Muse Band Power Viewer</h1>
+
+    <div class="connection-status">
+        <div class="spinner"></div>
+        <div class="status-text" id="connectionStatusText">Searching for MQTT...</div>
+    </div>
+
+    <div id="mqttStatus" class="status disconnected">
+        MQTT: Disconnected
+    </div>
+
+    <div class="mqtt-config">
+        <h3>MQTT Configuration</h3>
+        <div class="config-grid">
+            <div class="config-item">
+                <label for="protocol">Protocol:</label>
+                <select id="protocol">
+                    <option value="wss">WSS (Secure)</option>
+                    <option value="ws">WS (Unsecure)</option>
+                </select>
+            </div>
+            <div class="config-item">
+                <label for="brokerUrl">Broker URL:</label>
+                <input type="text" id="brokerUrl" placeholder="21c4029e653247699764b7b976972f4f.s1.eu.hivemq.cloud">
+            </div>
+            <div class="config-item">
+                <label for="port">Port:</label>
+                <input type="number" id="port" placeholder="8884">
+            </div>
+            <div class="config-item">
+                <label for="username">Username:</label>
+                <input type="text" id="username" placeholder="bdrXR1crimson">
+            </div>
+            <div class="config-item">
+                <label for="password">Password:</label>
+                <input type="password" id="password" placeholder="bdrXR1crimson">
+            </div>
+            <div class="config-item">
+                <label for="topic">Topic:</label>
+                <input type="text" id="topic" placeholder="bdrxr/connectorToWeb">
+            </div>
+        </div>
+        <div class="button-container">
+            <button id="mqttConnectButton">Connect to MQTT</button>
+        </div>
+    </div>
+
+    <div class="chart-container">
+        <button id="fitButton">Fit to Window</button>
+        <canvas id="bandPowerChart"></canvas>
+    </div>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", function () {
+            // Default MQTT configuration
+            const defaultConfig = {
+                protocol: 'wss',
+                brokerUrl: 'wss://21c4029e653247699764b7b976972f4f.s1.eu.hivemq.cloud',
+                port: 8884,
+                username: 'bdrXR1crimson',
+                password: 'bdrXR1crimson',
+                topic: 'bdrxr/connectorToWeb'
+            };
+
+            let client = null;
+            let chart = null;
+            let isFullscreen = false;
+            let channelBuffers = {}; // Store recent samples for each channel
+
+            // Function to toggle fullscreen
+            function toggleFullscreen() {
+                const container = document.querySelector('.chart-container');
+                isFullscreen = !isFullscreen;
+                
+                if (isFullscreen) {
+                    container.classList.add('fullscreen');
+                    document.body.style.overflow = 'hidden';
+                } else {
+                    container.classList.remove('fullscreen');
+                    document.body.style.overflow = '';
+                }
+                
+                // Resize chart after transition
+                setTimeout(() => {
+                    chart.resize();
+                }, 300);
+            }
+
+            // Function to handle window resize
+            function handleResize() {
+                if (isFullscreen) {
+                    chart.resize();
+                }
+            }
+
+            // Add event listener for fit button
+            document.getElementById('fitButton').addEventListener('click', toggleFullscreen);
+
+            // Add window resize listener with debounce
+            let resizeTimeout;
+            window.addEventListener('resize', () => {
+                clearTimeout(resizeTimeout);
+                resizeTimeout = setTimeout(handleResize, 250);
+            });
+
+            // Initialize Chart.js
+            const ctx = document.getElementById('bandPowerChart').getContext('2d');
+            chart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma'],
+                    datasets: [{
+                        label: 'Average Band Power',
+                        data: [0, 0, 0, 0, 0],
+                        backgroundColor: [
+                            'rgba(255, 99, 132, 0.8)',
+                            'rgba(54, 162, 235, 0.8)',
+                            'rgba(255, 206, 86, 0.8)',
+                            'rgba(75, 192, 192, 0.8)',
+                            'rgba(153, 102, 255, 0.8)'
+                        ],
+                        borderColor: [
+                            'rgba(255, 99, 132, 1)',
+                            'rgba(54, 162, 235, 1)',
+                            'rgba(255, 206, 86, 1)',
+                            'rgba(75, 192, 192, 1)',
+                            'rgba(153, 102, 255, 1)'
+                        ],
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    layout: {
+                        padding: {
+                            bottom: 40,  // Add padding at the bottom for x-axis labels
+                            left: 20,    // Add padding on the left
+                            right: 20,   // Add padding on the right
+                            top: 20      // Add padding at the top
+                        }
+                    },
+                    scales: {
+                        x: {
+                            ticks: {
+                                font: {
+                                    size: 16  // Increase font size for better visibility
+                                },
+                                padding: 10  // Add padding between ticks
+                            }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Power Value',
+                                font: {
+                                    size: 16
+                                }
+                            },
+                            ticks: {
+                                font: {
+                                    size: 14
+                                }
+                            }
+                        }
+                    },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: 'Real-time Band Power Values',
+                            font: {
+                                size: 20
+                            },
+                            padding: {
+                                bottom: 20
+                            }
+                        },
+                        legend: {
+                            display: false  // Hide legend since we only have one dataset
+                        }
+                    }
+                }
+            });
+
+            // Function to update chart with band powers
+            function updateChartWithBandPowers(bands) {
+                const channels = Object.values(bands);
+                if (channels.length === 0) return;
+
+                // Initialize band power sums
+                const bandPowerSums = {
+                    delta: 0,
+                    theta: 0,
+                    alpha: 0,
+                    beta: 0,
+                    gamma: 0
+                };
+
+                // Sum up band powers from all channels
+                channels.forEach(channel => {
+                    bandPowerSums.delta += channel.delta;
+                    bandPowerSums.theta += channel.theta;
+                    bandPowerSums.alpha += channel.alpha;
+                    bandPowerSums.beta += channel.beta;
+                    bandPowerSums.gamma += channel.gamma;
+                });
+
+                // Calculate averages
+                const numChannels = channels.length;
+                Object.keys(bandPowerSums).forEach(band => {
+                    bandPowerSums[band] /= numChannels;
+                });
+
+                // Update chart
+                chart.data.datasets[0].data = [
+                    bandPowerSums.delta,
+                    bandPowerSums.theta,
+                    bandPowerSums.alpha,
+                    bandPowerSums.beta,
+                    bandPowerSums.gamma
+                ];
+
+                // Update title with number of active channels
+                chart.options.plugins.title.text = `Real-time Band Power Values (${numChannels} channels)`;
+                chart.update('none'); // Update without animation
+            }
+
+            // Function to cleanup resources
+            function cleanupResources() {
+                if (client) {
+                    client.end();
+                    client = null;
+                }
+                channelBuffers = {}; // Clear channel buffers
+            }
+
+            // Function to get current MQTT configuration
+            function getMqttConfig() {
+                const protocol = document.getElementById('protocol').value || defaultConfig.protocol;
+                const brokerUrl = document.getElementById('brokerUrl').value || defaultConfig.brokerUrl;
+                const port = document.getElementById('port').value || defaultConfig.port;
+                const username = document.getElementById('username').value || defaultConfig.username;
+                const password = document.getElementById('password').value || defaultConfig.password;
+                const topic = document.getElementById('topic').value || defaultConfig.topic;
+
+                let fullBrokerUrl = brokerUrl;
+                if (!brokerUrl.startsWith('wss://') && !brokerUrl.startsWith('ws://')) {
+                    fullBrokerUrl = `${protocol}://${brokerUrl}`;
+                }
+                if (!brokerUrl.endsWith('/mqtt')) {
+                    fullBrokerUrl = `${fullBrokerUrl}/mqtt`;
+                }
+
+                return {
+                    protocol,
+                    brokerUrl: fullBrokerUrl,
+                    port,
+                    username,
+                    password,
+                    topic
+                };
+            }
+
+            // MQTT Connection handling
+            function setupMqttConnection() {
+                const config = getMqttConfig();
+                const options = {
+                    clientId: 'mqtt_diagnostic_' + Math.random().toString(16).substr(2, 8),
+                    username: config.username,
+                    password: config.password,
+                    port: config.port,
+                    protocol: config.protocol
+                };
+
+                client = mqtt.connect(config.brokerUrl, options);
+
+                client.on('connect', () => {
+                    document.getElementById('mqttStatus').textContent = 'MQTT: Connected';
+                    document.getElementById('mqttStatus').className = 'status connected';
+                    document.getElementById('connectionStatusText').textContent = 'MQTT Connected';
+                    document.getElementById('mqttConnectButton').disabled = false;
+                    document.getElementById('mqttConnectButton').textContent = 'Refresh Connection';
+                    document.getElementById('mqttConnectButton').classList.add('refresh');
+                    
+                    // Subscribe to the topic
+                    client.subscribe(config.topic, (err) => {
+                        if (err) {
+                            console.error('Subscription error:', err);
+                            document.getElementById('connectionStatusText').textContent = 'Subscription Error';
+                        } else {
+                            document.getElementById('connectionStatusText').textContent = 'Listening on topic: ' + config.topic;
+                        }
+                    });
+                });
+
+                client.on('error', (error) => {
+                    cleanupResources();
+                    document.getElementById('mqttStatus').textContent = 'MQTT: Error - ' + error.message;
+                    document.getElementById('mqttStatus').className = 'status disconnected';
+                    document.getElementById('connectionStatusText').textContent = 'MQTT Error';
+                    document.getElementById('mqttConnectButton').disabled = false;
+                    document.getElementById('mqttConnectButton').textContent = 'Connect to MQTT';
+                    document.getElementById('mqttConnectButton').classList.remove('refresh');
+                });
+
+                client.on('close', () => {
+                    cleanupResources();
+                    document.getElementById('mqttStatus').textContent = 'MQTT: Connection closed';
+                    document.getElementById('mqttStatus').className = 'status disconnected';
+                    document.getElementById('connectionStatusText').textContent = 'MQTT Disconnected';
+                    document.getElementById('mqttConnectButton').disabled = false;
+                    document.getElementById('mqttConnectButton').textContent = 'Connect to MQTT';
+                    document.getElementById('mqttConnectButton').classList.remove('refresh');
+                });
+
+                // Add message handler
+                client.on('message', (topic, message) => {
+                    try {
+                        const messageData = JSON.parse(message.toString());
+                        
+                        // Process each sample in the batch
+                        if (messageData.samples && Array.isArray(messageData.samples)) {
+                            messageData.samples.forEach(sample => {
+                                // Check if sample has the expected structure
+                                if (!sample || !sample.data || !Array.isArray(sample.data)) {
+                                    console.error('Invalid sample structure:', sample);
+                                    return;
+                                }
+
+                                // Update the chart with the processed band powers
+                                if (messageData.processedData && messageData.processedData.bands) {
+                                    updateChartWithBandPowers(messageData.processedData.bands);
+                                }
+                            });
+                        } else {
+                            console.error('Unexpected message structure:', messageData);
+                        }
+                    } catch (error) {
+                        console.error('Error parsing message:', error);
+                        console.error('Raw message:', message.toString());
+                    }
+                });
+            }
+
+            // Add click handler for MQTT connect/refresh button
+            document.getElementById('mqttConnectButton').addEventListener('click', async () => {
+                if (!client || !client.connected) {
+                    setupMqttConnection();
+                } else {
+                    try {
+                        cleanupResources();
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        setupMqttConnection();
+                    } catch (error) {
+                        console.error('Error during refresh:', error);
+                        document.getElementById('connectionStatusText').textContent = 'Refresh Error';
+                    }
+                }
+            });
+
+            // Clean up on page unload
+            window.addEventListener('beforeunload', () => {
+                cleanupResources();
+            });
+        });
+    </script>
+</body>
+</html> 
